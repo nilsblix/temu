@@ -1,6 +1,6 @@
 use std::os::fd::OwnedFd;
 
-use super::ansi::{ParsedResult, AnsiParser, TerminalAction};
+use super::ansi::{AnsiParser, ParsedResult, TerminalAction};
 
 use nix::errno::Errno;
 use nix::fcntl::{FcntlArg, OFlag, fcntl};
@@ -45,7 +45,6 @@ impl CursorPos {
         (self.0 - num_chars_before_last + 1, lines.len())
     }
 }
-
 
 pub struct TerminalEmulator {
     fd: OwnedFd,
@@ -110,17 +109,15 @@ impl TerminalEmulator {
                 }
                 ParsedResult::CurrentlyParsing => {}
                 ParsedResult::Action(action) => match action {
-                    TerminalAction::ClearEntireScreen => {
-                        self.buf.clear();
-                        self.cursor = CursorPos::default();
-                    }
+                    TerminalAction::CursorToOrigin => self.cursor = CursorPos::default(),
+                    TerminalAction::EraseInDisplay => todo!(),
+                    TerminalAction::EraseFromCursorToBeginningOfScreen => self.buf.clear(),
                 },
                 ParsedResult::InvalidAnsi(b) => {
                     println!(
-                        "found invalid ansi when reading: `{}`, adding to buf",
+                        "found invalid ansi when reading: `{}`, not adding to buf",
                         b as char
                     );
-                    self.buf.push(b);
                 }
             }
         }

@@ -19,11 +19,9 @@ enum CsiState {
     FoundParam,
 }
 
-fn is_csi_ending(b: u8) -> bool {
-    match b {
-        b'H' | b'J' => true,
-        _ => false,
-    }
+/// Taken from https://gist.github.com/fnky/458719343aabd01cfb17a3a4f7296797
+fn is_csi_terminator(b: u8) -> bool {
+    b"HfABCDEFGnMsuJKm".contains(&b)
 }
 
 struct Params(Vec<u32>);
@@ -48,12 +46,15 @@ impl fmt::Display for NumberBucket {
             if idx != 0 {
                 write!(f, ", ")?;
             }
-            write!(f, "{}", val)?;
+            write!(f, "{}", *val as char)?;
         }
         Ok(())
     }
 }
 
+// TODO: Factor this out into `CsiParser` and make `AnsiParser` an enum over
+// several parsers, which enables us to parse several different escape
+// sequences.
 pub struct AnsiParser {
     state: CsiState,
     params: Params,
@@ -71,7 +72,20 @@ impl Default for AnsiParser {
 }
 
 pub enum TerminalAction {
-    ClearEntireScreen,
+    CursorToOrigin,
+    EraseFromCursorToBeginningOfScreen,
+    EraseInDisplay,
+}
+
+impl TerminalAction {
+    fn from_params_and_terminator(params: &[u32], terminator: u8) -> Option<TerminalAction> {
+        Some(match (params, terminator) {
+            (&[], b'H') => Self::CursorToOrigin,
+            (&[], b'J') | (&[0], b'J') => Self::EraseInDisplay,
+            (&[2], b'J') => Self::EraseFromCursorToBeginningOfScreen,
+            _ => return None,
+        })
+    }
 }
 
 pub enum ParsedResult {
@@ -94,7 +108,7 @@ impl AnsiParser {
                 ParsedResult::CurrentlyParsing
             }
             CsiState::ExpectingParams => {
-                if is_csi_ending(b) {
+                if is_csi_terminator(b) {
                     return self.terminate_current_parse(b);
                 }
 
@@ -109,7 +123,7 @@ impl AnsiParser {
                 ParsedResult::InvalidAnsi(b)
             }
             CsiState::FoundParam => {
-                if is_csi_ending(b) {
+                if is_csi_terminator(b) {
                     return self.terminate_current_parse(b);
                 }
 
@@ -138,9 +152,11 @@ impl AnsiParser {
     }
 
     fn collect_bucket(&mut self) -> Option<()> {
-        let param = parse_u32(&self.number_bucket.0)?;
-        self.params.0.push(param);
-        self.number_bucket.0.clear();
+        if !self.number_bucket.0.is_empty() {
+            let param = parse_u32(&self.number_bucket.0)?;
+            self.params.0.push(param);
+            self.number_bucket.0.clear();
+        }
         Some(())
     }
 
@@ -163,13 +179,11 @@ impl AnsiParser {
             }
         };
         self.state = CsiState::Waiting;
-        match (self.params.0.as_slice(), b) {
-            (&[2], b'J') => {
-                self.params.0.clear();
-                ParsedResult::Action(TerminalAction::ClearEntireScreen)
-            }
-            _ => {
-                self.params.0.clear();
+        let action_result = TerminalAction::from_params_and_terminator(&self.params.0, b);
+        self.params.0.clear();
+        match action_result {
+            Some(action) => ParsedResult::Action(action),
+            None => {
                 println!(
                     "found unimplemented CSI terminator: `{}`, with params `{}`",
                     b as char, self.params
