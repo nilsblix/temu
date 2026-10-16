@@ -1,14 +1,21 @@
 use std::os::fd::OwnedFd;
 
-use super::ansi::{AnsiParser, ParsedResult, TerminalAction};
+use super::ansi::{AnsiParser, ParsedResult};
 
 use nix::errno::Errno;
 use nix::fcntl::{FcntlArg, OFlag, fcntl};
 use nix::pty::{ForkptyResult, forkpty};
 
-fn spawn_pty_with_shell() -> OwnedFd {
+fn spawn_pty_with_shell(window_size: WindowSize) -> OwnedFd {
+    let win_size = nix::pty::Winsize {
+        ws_row: window_size.rows as u16,
+        ws_col: window_size.cols as u16,
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
+
     unsafe {
-        match forkpty(None, None) {
+        match forkpty(&win_size, None) {
             Ok(ForkptyResult::Parent { master, child: _ }) => {
                 let flags = OFlag::from_bits_truncate(fcntl(&master, FcntlArg::F_GETFL).unwrap());
                 fcntl(&master, FcntlArg::F_SETFL(flags | OFlag::O_NONBLOCK)).unwrap();
@@ -32,40 +39,82 @@ fn spawn_pty_with_shell() -> OwnedFd {
     }
 }
 
-/// 0-indexed into `TerminalEmulator.buf`
+/// 0-indexed.
 #[derive(Clone, Default)]
-pub struct CursorPos(usize);
+pub struct CursorPos {
+    pub row: usize,
+    pub col: usize,
+}
 
-impl CursorPos {
-    /// Returns the 1-indexed visual position of the cursor.
-    pub fn visual_pos(&self, _window_size_in_chars: (usize, usize), data: &[u8]) -> (usize, usize) {
-        let up_to_cursor = &data[0..self.0];
-        let lines: Vec<_> = up_to_cursor.split(|b| *b == b'\n').collect();
-        let num_chars_before_last = up_to_cursor.len() - lines.last().map(|x| x.len()).unwrap_or(0);
-        (self.0 - num_chars_before_last + 1, lines.len())
-    }
+#[derive(Clone)]
+pub struct WindowSize {
+    pub rows: usize,
+    pub cols: usize,
 }
 
 pub struct TerminalEmulator {
     fd: OwnedFd,
     buf: Vec<u8>,
     cursor: CursorPos,
+    window_size: WindowSize,
     parser: AnsiParser,
 }
 
 impl TerminalEmulator {
-    pub fn spawn() -> TerminalEmulator {
-        let fd = spawn_pty_with_shell();
+    pub fn spawn(window_size: WindowSize) -> TerminalEmulator {
+        let fd = spawn_pty_with_shell(window_size.clone());
         TerminalEmulator {
             fd,
-            buf: Vec::new(),
+            buf: vec![b' '; window_size.rows * window_size.rows],
             cursor: CursorPos::default(),
+            window_size,
             parser: AnsiParser::default(),
         }
     }
 
-    pub fn cursor_visual_pos(&self, window_size_in_chars: (usize, usize)) -> (usize, usize) {
-        self.cursor.visual_pos(window_size_in_chars, &self.buf)
+    pub fn cursor(&self) -> CursorPos {
+        self.cursor.clone()
+    }
+
+    fn cursor_idx(&self) -> usize {
+        self.cursor.col + self.window_size.cols * self.cursor.row
+    }
+
+    fn put_byte_onto_screen(&mut self, b: u8) {
+        let idx = self.cursor_idx();
+        self.buf[idx] = b;
+        if self.cursor.col + 1 < self.window_size.cols {
+            self.cursor.col += 1
+        } else {
+            self.cursor.col = 0;
+            self.line_feed();
+        }
+    }
+
+    fn process_byte(&mut self, b: u8) {
+        match b {
+            b'\r' => self.cursor.col = 0,
+            b'\n' => self.line_feed(),
+            b'\x08' => self.cursor.col = self.cursor.col.saturating_sub(1),
+            b'\t' => {
+                let next_tab = ((self.cursor.col / 8) + 1) * 8;
+                self.cursor.col = next_tab.min(self.window_size.cols - 1);
+            }
+            b' '..b'~' => {
+                self.put_byte_onto_screen(b);
+            }
+            _ => {}
+        }
+    }
+
+    fn line_feed(&mut self) {
+        if self.cursor.row + 1 < self.window_size.rows {
+            self.cursor.row += 1;
+        } else {
+            self.buf.copy_within(self.window_size.cols.., 0);
+            let last_row = (self.window_size.rows - 1) * self.window_size.cols;
+            self.buf[last_row..].fill(b' ');
+        }
     }
 
     pub fn write(&self, bytes: &[u8]) {
@@ -95,29 +144,35 @@ impl TerminalEmulator {
         Vec::new()
     }
 
-    fn increment_cursor(&mut self) {
-        self.cursor.0 += 1;
-    }
-
     pub fn read(&mut self) {
+        use super::ansi::{TerminalAction, EraseMode};
+
         let bytes = self.read_from_fd();
         for b in bytes {
             match self.parser.next(b) {
-                ParsedResult::Passthrough(b) => {
-                    self.increment_cursor();
-                    self.buf.push(b);
-                }
+                ParsedResult::Passthrough(b) => self.process_byte(b),
                 ParsedResult::CurrentlyParsing => {}
                 ParsedResult::Action(action) => match action {
-                    TerminalAction::CursorToOrigin => self.cursor = CursorPos::default(),
-                    TerminalAction::EraseFromCursorUntilEndOfScreen => {
-                        debug_assert!(self.cursor.0 <= self.buf.len());
-                        self.buf.truncate(self.cursor.0);
+                    TerminalAction::CursorPosition { row, col } =>
+                        self.cursor = CursorPos { row: row - 1, col: col - 1 },
+                    TerminalAction::CursorUp(n) =>
+                        self.cursor.row = self.cursor.row.saturating_sub(n),
+                    TerminalAction::CursorDown(n) =>
+                        self.cursor.row = (self.cursor.row + n).min(self.window_size.rows - 1),
+                    TerminalAction::CursorForward(n) =>
+                        self.cursor.col = (self.cursor.col + n).min(self.window_size.cols - 1),
+                    TerminalAction::CursorBackward(n) =>
+                        self.cursor.col = self.cursor.col.saturating_sub(n),
+                    TerminalAction::Erase(EraseMode::ToBeginning) => {
+                        let idx = self.cursor_idx();
+                        self.buf[0..idx].fill(b' ');
                     }
-                    TerminalAction::EraseScrollback => println!(
-                        "error while performing action: cannot erase scrollback due to us not implementing scrollback..."
-                    ),
-                    TerminalAction::EraseFromCursorToBeginningOfScreen => self.buf.clear(),
+                    TerminalAction::Erase(EraseMode::Scrollback) =>
+                        self.buf.fill(b' '),
+                    TerminalAction::Erase(EraseMode::ToEndOfScreen) => {
+                        let idx = self.cursor_idx();
+                        self.buf[idx..].fill(b' ');
+                    }
                 },
                 ParsedResult::InvalidAnsi(b) => {
                     println!(
@@ -129,7 +184,14 @@ impl TerminalEmulator {
         }
     }
 
-    pub fn data(&self) -> &[u8] {
-        &self.buf
+    pub fn display_text(&self) -> String {
+        let mut ret = String::with_capacity(self.window_size.rows * (self.window_size.cols + 1));
+        for (row_idx, row) in self.buf.chunks(self.window_size.cols).enumerate() {
+            ret.extend(row.iter().map(|b| char::from(*b)));
+            if row_idx + 1 < self.window_size.rows {
+                ret.push('\n');
+            }
+        }
+        ret
     }
 }

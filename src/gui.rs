@@ -47,12 +47,12 @@ impl TemuGui {
     fn draw_cursor(&self, ui: &mut egui::Ui, origin: egui::Pos2) {
         let p = ui.painter();
         let cursor_rect = {
-            let visual_cursor_pos = self.terminal_emulator.cursor_visual_pos((0, 0));
+            let cursor = self.terminal_emulator.cursor();
             let char_size = self.char_size.clone().unwrap();
             let min = origin
                 + egui::vec2(
-                    (visual_cursor_pos.0 - 1) as f32 * char_size.width,
-                    (visual_cursor_pos.1 - 1) as f32 * char_size.height,
+                    cursor.col as f32 * char_size.width,
+                    cursor.row as f32 * char_size.height,
                 );
             let size = egui::vec2(char_size.width, char_size.height);
             egui::Rect::from_min_size(min, size)
@@ -99,9 +99,7 @@ impl eframe::App for TemuGui {
 
         egui::CentralPanel::default().show(ui, |ui| {
             let origin = ui.cursor().min;
-            let s = unsafe { std::str::from_utf8_unchecked(&self.terminal_emulator.data()) };
-            ui.label(s);
-
+            ui.add(egui::Label::new(self.terminal_emulator.display_text()).extend());
             self.draw_cursor(ui, origin);
         });
     }
