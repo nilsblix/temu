@@ -1,5 +1,7 @@
 use std::os::fd::OwnedFd;
 
+use super::ansi::{ParsedResult, AnsiParser, TerminalAction};
+
 use nix::errno::Errno;
 use nix::fcntl::{FcntlArg, OFlag, fcntl};
 use nix::pty::{ForkptyResult, forkpty};
@@ -31,7 +33,7 @@ fn spawn_pty_with_shell() -> OwnedFd {
 }
 
 /// 0-indexed into `TerminalEmulator.buf`
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct CursorPos(usize);
 
 impl CursorPos {
@@ -44,10 +46,12 @@ impl CursorPos {
     }
 }
 
+
 pub struct TerminalEmulator {
     fd: OwnedFd,
     buf: Vec<u8>,
     cursor: CursorPos,
+    parser: AnsiParser,
 }
 
 impl TerminalEmulator {
@@ -56,7 +60,8 @@ impl TerminalEmulator {
         TerminalEmulator {
             fd,
             buf: Vec::new(),
-            cursor: CursorPos(0),
+            cursor: CursorPos::default(),
+            parser: AnsiParser::default(),
         }
     }
 
@@ -91,15 +96,34 @@ impl TerminalEmulator {
         Vec::new()
     }
 
-    fn increment_cursor(&mut self, bytes: &[u8]) {
-        // TODO: Don't increment for ANSI codes...
-        self.cursor.0 += bytes.len();
+    fn increment_cursor(&mut self) {
+        self.cursor.0 += 1;
     }
 
     pub fn read(&mut self) {
-        let mut bytes = self.read_from_fd();
-        self.increment_cursor(&bytes);
-        self.buf.append(&mut bytes);
+        let bytes = self.read_from_fd();
+        for b in bytes {
+            match self.parser.next(b) {
+                ParsedResult::Passthrough(b) => {
+                    self.increment_cursor();
+                    self.buf.push(b);
+                }
+                ParsedResult::CurrentlyParsing => {}
+                ParsedResult::Action(action) => match action {
+                    TerminalAction::ClearEntireScreen => {
+                        self.buf.clear();
+                        self.cursor = CursorPos::default();
+                    }
+                },
+                ParsedResult::InvalidAnsi(b) => {
+                    println!(
+                        "found invalid ansi when reading: `{}`, adding to buf",
+                        b as char
+                    );
+                    self.buf.push(b);
+                }
+            }
+        }
     }
 
     pub fn data(&self) -> &[u8] {

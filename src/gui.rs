@@ -102,10 +102,7 @@ impl eframe::App for TemuGui {
             let s = unsafe { std::str::from_utf8_unchecked(&self.terminal_emulator.data()) };
             ui.label(s);
 
-            self.draw_cursor(
-                ui,
-                origin,
-            );
+            self.draw_cursor(ui, origin);
         });
     }
 }
