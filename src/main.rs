@@ -29,19 +29,19 @@ fn main() {
     let fd = spawn_pty_with_shell();
     let native_options = eframe::NativeOptions::default();
     _ = eframe::run_native(
-        "Thad",
+        "Temu",
         native_options,
-        Box::new(|cc| Ok(Box::new(Thad::new(cc, fd)))),
+        Box::new(|cc| Ok(Box::new(Temu::new(cc, fd)))),
     )
     .unwrap();
 }
 
-struct Thad {
+struct Temu {
     fd: OwnedFd,
     buf: Vec<u8>,
 }
 
-impl Thad {
+impl Temu {
     fn new(cc: &eframe::CreationContext<'_>, fd: OwnedFd) -> Self {
         // Customize egui here with cc.egui_ctx.set_fonts and
         // cc.egui_ctx.set_global_style. Restore app state using cc.storage
@@ -55,7 +55,7 @@ impl Thad {
     }
 }
 
-impl eframe::App for Thad {
+impl eframe::App for Temu {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         ui.set_theme(egui::Theme::Dark);
 
