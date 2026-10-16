@@ -37,7 +37,7 @@ fn main() {
     _ = eframe::run_native(
         "Temu",
         native_options,
-        Box::new(|cc| Ok(Box::new(Temu::new(cc, fd)))),
+        Box::new(|cc| Ok(Box::new(Temu::new(cc, fd, 16.0)))),
     )
     .unwrap();
 }
@@ -65,16 +65,16 @@ struct Temu {
     buf: Vec<u8>,
     cursor: CursorPos,
     char_size: Option<CharSize>,
-    window_margin: egui::Margin,
+    font_id: egui::FontId,
 }
 
 impl Temu {
-    fn new(cc: &eframe::CreationContext<'_>, fd: OwnedFd) -> Self {
+    fn new(cc: &eframe::CreationContext<'_>, fd: OwnedFd, text_size: f32) -> Self {
         cc.egui_ctx.set_theme(egui::Theme::Dark);
 
         let mut style = egui::Style::default();
-        let window_margin = style.spacing.window_margin;
-        style.override_text_style = Some(egui::TextStyle::Monospace);
+        let font_id = egui::FontId::monospace(text_size);
+        style.override_font_id = Some(font_id.clone());
         cc.egui_ctx.set_style_of(egui::Theme::Dark, style);
 
         Self {
@@ -82,7 +82,7 @@ impl Temu {
             buf: Vec::new(),
             cursor: CursorPos::default(),
             char_size: None,
-            window_margin,
+            font_id,
         }
     }
 
@@ -118,8 +118,8 @@ impl eframe::App for Temu {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         if self.char_size.is_none() {
             self.char_size = Some(ui.fonts_mut(|fonts| {
-                let width = fonts.glyph_width(&egui::FontId::monospace(16.0), '@');
-                let height = fonts.row_height(&egui::FontId::monospace(16.0));
+                let width = fonts.glyph_width(&self.font_id, '@');
+                let height = fonts.row_height(&self.font_id);
                 CharSize { width, height }
             }));
         }
@@ -140,7 +140,11 @@ impl eframe::App for Temu {
             for event in &i.events {
                 let text = match event {
                     egui::Event::Text(t) => t.as_str(),
-                    egui::Event::Key { key, .. } if *key == egui::Key::Enter => "\n",
+                    egui::Event::Key {
+                        key: egui::Key::Enter,
+                        pressed: true,
+                        ..
+                    } => "\r",
                     _ => continue,
                 };
                 self.write_bytes(text.as_bytes());
@@ -148,6 +152,8 @@ impl eframe::App for Temu {
         });
 
         egui::CentralPanel::default().show(ui, |ui| {
+            let origin = ui.cursor().min;
+
             let s = unsafe { std::str::from_utf8_unchecked(&self.buf) };
             ui.label(s);
 
@@ -159,19 +165,15 @@ impl eframe::App for Temu {
             });
 
             let cursor_rect = {
-                let char_size = self.char_size.clone().clone().unwrap();
-                let (margin_left, margin_top) = (self.window_margin.left, self.window_margin.top);
-                let min = egui::pos2(
-                    (self.cursor.col - 1) as f32 * char_size.width + margin_left as f32,
-                    (self.cursor.row - 1) as f32 * char_size.height + margin_top as f32,
+                let char_size = self.char_size.clone().unwrap();
+                let min = origin + egui::vec2(
+                    (self.cursor.col - 1) as f32 * char_size.width,
+                    (self.cursor.row - 1) as f32 * char_size.height,
                 );
-                egui::Rect::from_min_max(
-                    min,
-                    min + egui::vec2(font_width, font_height),
-                )
+                egui::Rect::from_min_size(min, egui::vec2(font_width, font_height))
             };
 
-            p.rect_filled(cursor_rect, 0, egui::Color32::WHITE);
+            p.rect_filled(cursor_rect, 0, egui::Color32::GRAY);
         });
     }
 }
