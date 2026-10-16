@@ -117,15 +117,22 @@ impl Temu {
 impl eframe::App for Temu {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         if self.char_size.is_none() {
+            let pixels_per_point = ui.pixels_per_point();
+            let extra_spacing = ui.spacing().extra_text_line_spacing;
+
             self.char_size = Some(ui.fonts_mut(|fonts| {
                 let width = fonts.glyph_width(&self.font_id, '@');
-                let height = fonts.row_height(&self.font_id);
+                let logical_height = fonts.row_height(&self.font_id) + extra_spacing;
+                let height = (logical_height * pixels_per_point).round() / pixels_per_point;
                 CharSize { width, height }
             }));
         }
 
         let mut incoming = self.read_bytes();
         for b in &incoming {
+            // TODO: This assumes that the screen is infinite. We should instead
+            // take the window size, and calculate the cursor with respect to
+            // that.
             match *b {
                 b'\n' => {
                     self.cursor.row += 1;
@@ -158,11 +165,6 @@ impl eframe::App for Temu {
             ui.label(s);
 
             let p = ui.painter();
-            let (font_width, font_height) = p.fonts_mut(|f| {
-                let w = f.glyph_width(&egui::FontId::monospace(16.0), 'a');
-                let h = f.row_height(&egui::FontId::monospace(16.0));
-                (w, h)
-            });
 
             let cursor_rect = {
                 let char_size = self.char_size.clone().unwrap();
@@ -170,7 +172,8 @@ impl eframe::App for Temu {
                     (self.cursor.col - 1) as f32 * char_size.width,
                     (self.cursor.row - 1) as f32 * char_size.height,
                 );
-                egui::Rect::from_min_size(min, egui::vec2(font_width, font_height))
+                let size = egui::vec2(char_size.width, char_size.height);
+                egui::Rect::from_min_size(min, size)
             };
 
             p.rect_filled(cursor_rect, 0, egui::Color32::GRAY);
