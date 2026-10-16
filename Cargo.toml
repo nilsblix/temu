@@ -1,0 +1,8 @@
+[package]
+name = "thad"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+eframe = "0.37.0"
+nix = { version = "0.31.3", features = [ "process", "term", "fs" ] }
