@@ -110,7 +110,13 @@ impl TerminalEmulator {
                 ParsedResult::CurrentlyParsing => {}
                 ParsedResult::Action(action) => match action {
                     TerminalAction::CursorToOrigin => self.cursor = CursorPos::default(),
-                    TerminalAction::EraseInDisplay => todo!(),
+                    TerminalAction::EraseFromCursorUntilEndOfScreen => {
+                        debug_assert!(self.cursor.0 <= self.buf.len());
+                        self.buf.truncate(self.cursor.0);
+                    }
+                    TerminalAction::EraseScrollback => println!(
+                        "error while performing action: cannot erase scrollback due to us not implementing scrollback..."
+                    ),
                     TerminalAction::EraseFromCursorToBeginningOfScreen => self.buf.clear(),
                 },
                 ParsedResult::InvalidAnsi(b) => {

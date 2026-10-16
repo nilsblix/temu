@@ -71,18 +71,21 @@ impl Default for AnsiParser {
     }
 }
 
+/// Taken from https://gist.github.com/fnky/458719343aabd01cfb17a3a4f7296797
 pub enum TerminalAction {
     CursorToOrigin,
     EraseFromCursorToBeginningOfScreen,
-    EraseInDisplay,
+    EraseScrollback,
+    EraseFromCursorUntilEndOfScreen,
 }
 
 impl TerminalAction {
     fn from_params_and_terminator(params: &[u32], terminator: u8) -> Option<TerminalAction> {
         Some(match (params, terminator) {
             (&[], b'H') => Self::CursorToOrigin,
-            (&[], b'J') | (&[0], b'J') => Self::EraseInDisplay,
+            (&[], b'J') | (&[0], b'J') => Self::EraseFromCursorUntilEndOfScreen,
             (&[2], b'J') => Self::EraseFromCursorToBeginningOfScreen,
+            (&[3], b'J') => Self::EraseScrollback,
             _ => return None,
         })
     }
@@ -180,17 +183,18 @@ impl AnsiParser {
         };
         self.state = CsiState::Waiting;
         let action_result = TerminalAction::from_params_and_terminator(&self.params.0, b);
-        self.params.0.clear();
-        match action_result {
+        let ret = match action_result {
             Some(action) => ParsedResult::Action(action),
             None => {
                 println!(
-                    "found unimplemented CSI terminator: `{}`, with params `{}`",
+                    "found unhandled CSI terminator: `{}`, with params `{}`",
                     b as char, self.params
                 );
                 self.reset_on_failure();
                 ParsedResult::InvalidAnsi(b)
             }
-        }
+        };
+        self.params.0.clear();
+        ret
     }
 }
