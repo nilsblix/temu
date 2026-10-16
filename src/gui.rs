@@ -1,6 +1,6 @@
 use eframe::egui::{self, FontId};
 
-use super::terminal_emulator::{CursorPos, TerminalEmulator};
+use super::terminal_emulator::TerminalEmulator;
 
 #[derive(Clone)]
 struct CharSize {
@@ -43,6 +43,23 @@ impl TemuGui {
         )
         .unwrap();
     }
+
+    fn draw_cursor(&self, ui: &mut egui::Ui, origin: egui::Pos2) {
+        let p = ui.painter();
+        let cursor_rect = {
+            let visual_cursor_pos = self.terminal_emulator.cursor_visual_pos((0, 0));
+            let char_size = self.char_size.clone().unwrap();
+            let min = origin
+                + egui::vec2(
+                    (visual_cursor_pos.0 - 1) as f32 * char_size.width,
+                    (visual_cursor_pos.1 - 1) as f32 * char_size.height,
+                );
+            let size = egui::vec2(char_size.width, char_size.height);
+            egui::Rect::from_min_size(min, size)
+        };
+
+        p.rect_filled(cursor_rect, 0, egui::Color32::GRAY);
+    }
 }
 
 fn get_char_size(ui: &egui::Ui, font_id: &FontId) -> CharSize {
@@ -55,21 +72,6 @@ fn get_char_size(ui: &egui::Ui, font_id: &FontId) -> CharSize {
         let height = (logical_height * pixels_per_point).round() / pixels_per_point;
         CharSize { width, height }
     })
-}
-
-fn draw_cursor(cursor: &CursorPos, ui: &mut egui::Ui, origin: egui::Pos2, char_size: &CharSize) {
-    let p = ui.painter();
-    let cursor_rect = {
-        let min = origin
-            + egui::vec2(
-                (cursor.col - 1) as f32 * char_size.width,
-                (cursor.row - 1) as f32 * char_size.height,
-            );
-        let size = egui::vec2(char_size.width, char_size.height);
-        egui::Rect::from_min_size(min, size)
-    };
-
-    p.rect_filled(cursor_rect, 0, egui::Color32::GRAY);
 }
 
 impl eframe::App for TemuGui {
@@ -100,11 +102,9 @@ impl eframe::App for TemuGui {
             let s = unsafe { std::str::from_utf8_unchecked(&self.terminal_emulator.data()) };
             ui.label(s);
 
-            draw_cursor(
-                &self.terminal_emulator.cursor(),
+            self.draw_cursor(
                 ui,
                 origin,
-                self.char_size.as_ref().unwrap(),
             );
         });
     }

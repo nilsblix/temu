@@ -30,16 +30,17 @@ fn spawn_pty_with_shell() -> OwnedFd {
     }
 }
 
-/// 1-indexed.
+/// 0-indexed into `TerminalEmulator.buf`
 #[derive(Clone)]
-pub struct CursorPos {
-    pub row: usize,
-    pub col: usize,
-}
+pub struct CursorPos(usize);
 
-impl Default for CursorPos {
-    fn default() -> Self {
-        Self { row: 1, col: 1 }
+impl CursorPos {
+    /// Returns the 1-indexed visual position of the cursor.
+    pub fn visual_pos(&self, _window_size_in_chars: (usize, usize), data: &[u8]) -> (usize, usize) {
+        let up_to_cursor = &data[0..self.0];
+        let lines: Vec<_> = up_to_cursor.split(|b| *b == b'\n').collect();
+        let num_chars_before_last = up_to_cursor.len() - lines.last().map(|x| x.len()).unwrap_or(0);
+        (self.0 - num_chars_before_last + 1, lines.len())
     }
 }
 
@@ -55,8 +56,12 @@ impl TerminalEmulator {
         TerminalEmulator {
             fd,
             buf: Vec::new(),
-            cursor: CursorPos::default(),
+            cursor: CursorPos(0),
         }
+    }
+
+    pub fn cursor_visual_pos(&self, window_size_in_chars: (usize, usize)) -> (usize, usize) {
+        self.cursor.visual_pos(window_size_in_chars, &self.buf)
     }
 
     pub fn write(&self, bytes: &[u8]) {
@@ -87,28 +92,14 @@ impl TerminalEmulator {
     }
 
     fn increment_cursor(&mut self, bytes: &[u8]) {
-        for b in bytes {
-            // TODO: This assumes that the screen is infinite. We should instead
-            // take the window size, and calculate the cursor with respect to
-            // that.
-            match *b {
-                b'\n' => {
-                    self.cursor.row += 1;
-                    self.cursor.col = 1;
-                }
-                _ => self.cursor.col += 1,
-            }
-        }
+        // TODO: Don't increment for ANSI codes...
+        self.cursor.0 += bytes.len();
     }
 
     pub fn read(&mut self) {
         let mut bytes = self.read_from_fd();
         self.increment_cursor(&bytes);
         self.buf.append(&mut bytes);
-    }
-
-    pub fn cursor(&self) -> CursorPos {
-        self.cursor.clone()
     }
 
     pub fn data(&self) -> &[u8] {
