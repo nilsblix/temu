@@ -15,8 +15,14 @@ fn spawn_pty_with_shell() -> OwnedFd {
             }
             Ok(ForkptyResult::Child) => {
                 let shell_name = c"bash";
-                nix::unistd::execvp(&shell_name, &[shell_name]).expect("could not launch shell");
-                std::process::exit(0);
+
+                match nix::unistd::execvp(&shell_name, &[shell_name]) {
+                    Ok(infallible) => match infallible {},
+                    Err(e) => {
+                        println!("could not spawn shell: {e}");
+                        std::process::exit(127);
+                    }
+                }
             }
             Err(e) => {
                 panic!("error: could not fork into pty: {e}");
@@ -36,32 +42,61 @@ fn main() {
     .unwrap();
 }
 
+/// 1-indexed.
+struct CursorPos {
+    row: usize,
+    col: usize,
+}
+
+impl Default for CursorPos {
+    fn default() -> Self {
+        Self { row: 1, col: 1 }
+    }
+}
+
+#[derive(Clone)]
+struct CharSize {
+    width: f32,
+    height: f32,
+}
+
 struct Temu {
     fd: OwnedFd,
     buf: Vec<u8>,
+    cursor: CursorPos,
+    char_size: Option<CharSize>,
+    window_margin: egui::Margin,
 }
 
 impl Temu {
     fn new(cc: &eframe::CreationContext<'_>, fd: OwnedFd) -> Self {
-        // Customize egui here with cc.egui_ctx.set_fonts and
-        // cc.egui_ctx.set_global_style. Restore app state using cc.storage
-        // (requires the "persistence" feature). Use the cc.gl (a glow::Context)
-        // to create graphics shaders and buffers that you can use for e.g.
-        // egui::PaintCallback.
+        cc.egui_ctx.set_theme(egui::Theme::Dark);
+
+        let mut style = egui::Style::default();
+        let window_margin = style.spacing.window_margin;
+        style.override_text_style = Some(egui::TextStyle::Monospace);
+        cc.egui_ctx.set_style_of(egui::Theme::Dark, style);
+
         Self {
             fd,
             buf: Vec::new(),
+            cursor: CursorPos::default(),
+            char_size: None,
+            window_margin,
         }
     }
 
-    fn write(&self, bytes: &[u8]) {
-        match nix::unistd::write(&self.fd, bytes) {
-            Ok(_) => {}
-            Err(e) => println!("failed to write to shell: {e}"),
+    fn write_bytes(&self, bytes: &[u8]) {
+        let mut to_write = bytes;
+        while to_write.len() > 0 {
+            match nix::unistd::write(&self.fd, bytes) {
+                Ok(n) => to_write = &to_write[n..],
+                Err(e) => println!("failed to write to shell: {e}"),
+            }
         }
     }
 
-    fn read(&self) -> Vec<u8> {
+    fn read_bytes(&self) -> Vec<u8> {
         let mut incoming = [0u8; 4096];
         match nix::unistd::read(&self.fd, &mut incoming) {
             Ok(n) => {
@@ -80,26 +115,63 @@ impl Temu {
 }
 
 impl eframe::App for Temu {
-    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
-        ui.set_theme(egui::Theme::Dark);
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        if self.char_size.is_none() {
+            self.char_size = Some(ui.fonts_mut(|fonts| {
+                let width = fonts.glyph_width(&egui::FontId::monospace(16.0), '@');
+                let height = fonts.row_height(&egui::FontId::monospace(16.0));
+                CharSize { width, height }
+            }));
+        }
 
-        let mut incoming = self.read();
+        let mut incoming = self.read_bytes();
+        for b in &incoming {
+            match *b {
+                b'\n' => {
+                    self.cursor.row += 1;
+                    self.cursor.col = 1;
+                }
+                _ => self.cursor.col += 1,
+            }
+        }
         self.buf.append(&mut incoming);
 
+        ui.input(|i| {
+            for event in &i.events {
+                let text = match event {
+                    egui::Event::Text(t) => t.as_str(),
+                    egui::Event::Key { key, .. } if *key == egui::Key::Enter => "\n",
+                    _ => continue,
+                };
+                self.write_bytes(text.as_bytes());
+            }
+        });
+
         egui::CentralPanel::default().show(ui, |ui| {
-            ui.input(|i| {
-                for event in &i.events {
-                    let text = match event {
-                        egui::Event::Text(t) => t.as_str(),
-                        egui::Event::Key { key, .. } if *key == egui::Key::Enter => "\n",
-                        _ => continue,
-                    };
-                    self.write(text.as_bytes());
-                }
+            let s = unsafe { std::str::from_utf8_unchecked(&self.buf) };
+            ui.label(s);
+
+            let p = ui.painter();
+            let (font_width, font_height) = p.fonts_mut(|f| {
+                let w = f.glyph_width(&egui::FontId::monospace(16.0), 'a');
+                let h = f.row_height(&egui::FontId::monospace(16.0));
+                (w, h)
             });
 
-            let s = unsafe { std::str::from_utf8_unchecked(&self.buf) };
-            ui.monospace(s);
+            let cursor_rect = {
+                let char_size = self.char_size.clone().clone().unwrap();
+                let (margin_left, margin_top) = (self.window_margin.left, self.window_margin.top);
+                let min = egui::pos2(
+                    (self.cursor.col - 1) as f32 * char_size.width + margin_left as f32,
+                    (self.cursor.row - 1) as f32 * char_size.height + margin_top as f32,
+                );
+                egui::Rect::from_min_max(
+                    min,
+                    min + egui::vec2(font_width, font_height),
+                )
+            };
+
+            p.rect_filled(cursor_rect, 0, egui::Color32::WHITE);
         });
     }
 }
