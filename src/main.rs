@@ -1,4 +1,4 @@
-use std::{os::fd::OwnedFd, process::Command};
+use std::os::fd::OwnedFd;
 
 use eframe::egui;
 use nix::errno::Errno;
@@ -53,23 +53,51 @@ impl Temu {
             buf: Vec::new(),
         }
     }
+
+    fn write(&self, bytes: &[u8]) {
+        match nix::unistd::write(&self.fd, bytes) {
+            Ok(_) => {}
+            Err(e) => println!("failed to write to shell: {e}"),
+        }
+    }
+
+    fn read(&self) -> Vec<u8> {
+        let mut incoming = [0u8; 4096];
+        match nix::unistd::read(&self.fd, &mut incoming) {
+            Ok(n) => {
+                let mut v = Vec::new();
+                v.extend_from_slice(&incoming[0..n]);
+                return v;
+            }
+            Err(Errno::EAGAIN) => {}
+            Err(e) => {
+                println!("failed to read from shell: {e}");
+            }
+        }
+
+        Vec::new()
+    }
 }
 
 impl eframe::App for Temu {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         ui.set_theme(egui::Theme::Dark);
 
-        let mut incoming = [0u8; 4096];
-        match nix::unistd::read(&self.fd, &mut incoming) {
-            Ok(n) => self.buf.extend_from_slice(&incoming[0..n]),
-            Err(Errno::EAGAIN) => {}
-            Err(e) => {
-                eprintln!("could not read from shell: {e}");
-                return;
-            }
-        };
+        let mut incoming = self.read();
+        self.buf.append(&mut incoming);
 
         egui::CentralPanel::default().show(ui, |ui| {
+            ui.input(|i| {
+                for event in &i.events {
+                    let text = match event {
+                        egui::Event::Text(t) => t.as_str(),
+                        egui::Event::Key { key, .. } if *key == egui::Key::Enter => "\n",
+                        _ => continue,
+                    };
+                    self.write(text.as_bytes());
+                }
+            });
+
             let s = unsafe { std::str::from_utf8_unchecked(&self.buf) };
             ui.monospace(s);
         });
