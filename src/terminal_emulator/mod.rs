@@ -1,10 +1,16 @@
+mod ansi;
+mod terminal_action;
+
 use std::os::fd::OwnedFd;
 
-use super::ansi::{AnsiParser, ParsedResult};
+use nix::{
+    errno::Errno,
+    fcntl::{FcntlArg, OFlag, fcntl},
+    pty::{ForkptyResult, forkpty},
+};
 
-use nix::errno::Errno;
-use nix::fcntl::{FcntlArg, OFlag, fcntl};
-use nix::pty::{ForkptyResult, forkpty};
+use ansi::{AnsiParser, AnsiResult};
+use terminal_action::{TerminalAction, EraseMode};
 
 fn spawn_pty_with_shell(window_size: WindowSize) -> OwnedFd {
     let win_size = nix::pty::Winsize {
@@ -145,14 +151,12 @@ impl TerminalEmulator {
     }
 
     pub fn read(&mut self) {
-        use super::ansi::{TerminalAction, EraseMode};
-
         let bytes = self.read_from_fd();
         for b in bytes {
             match self.parser.next(b) {
-                ParsedResult::Passthrough(b) => self.process_byte(b),
-                ParsedResult::CurrentlyParsing => {}
-                ParsedResult::Action(action) => match action {
+                AnsiResult::Passthrough(b) => self.process_byte(b),
+                AnsiResult::CurrentlyParsing => {}
+                AnsiResult::Action(action) => match action {
                     TerminalAction::CursorPosition { row, col } =>
                         self.cursor = CursorPos { row: row - 1, col: col - 1 },
                     TerminalAction::CursorUp(n) =>
@@ -174,9 +178,9 @@ impl TerminalEmulator {
                         self.buf[idx..].fill(b' ');
                     }
                 },
-                ParsedResult::InvalidAnsi(b) => {
+                AnsiResult::InvalidAnsi(b) => {
                     println!(
-                        "found invalid ansi when reading: `{}`, not adding to buf",
+                        "found invalid ansi when reading: `{}`, ignoring...",
                         b as char
                     );
                 }

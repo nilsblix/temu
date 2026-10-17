@@ -1,6 +1,6 @@
 use eframe::egui::{self, FontId};
 
-use super::terminal_emulator::TerminalEmulator;
+use crate::terminal_emulator::TerminalEmulator;
 
 #[derive(Clone)]
 struct CharSize {

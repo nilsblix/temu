@@ -1,4 +1,3 @@
-mod ansi;
 mod gui;
 mod terminal_emulator;
 

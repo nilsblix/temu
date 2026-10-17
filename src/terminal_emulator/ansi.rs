@@ -1,5 +1,7 @@
 use std::fmt;
 
+use super::TerminalAction;
+
 fn parse_u32(bytes: &[u8]) -> Option<u32> {
     bytes.iter().try_fold(0u32, |value, &byte| {
         let digit = byte.checked_sub(b'0')?;
@@ -71,44 +73,8 @@ impl Default for AnsiParser {
     }
 }
 
-pub enum EraseMode {
-    ToBeginning,
-    Scrollback,
-    ToEndOfScreen,
-}
 
-/// Taken from https://gist.github.com/fnky/458719343aabd01cfb17a3a4f7296797
-///
-/// Note that these are defined via the standard, for example CursorPosition is
-/// 1-indexed, as opposed to `terminal_emulator::CursorPosition` which is
-/// 0-indexed.
-pub enum TerminalAction {
-    CursorPosition { row: usize, col: usize },
-    CursorUp(usize),
-    CursorDown(usize),
-    CursorForward(usize),
-    CursorBackward(usize),
-    Erase(EraseMode),
-}
-
-impl TerminalAction {
-    fn from_params_and_terminator(params: &[u32], terminator: u8) -> Option<TerminalAction> {
-        Some(match (params, terminator) {
-            (&[], b'H') => Self::CursorPosition { row: 1, col: 1 },
-            (&[row, col], b'H') => Self::CursorPosition { row: row as usize, col: col as usize },
-            (&[n], b'A') => Self::CursorUp(n as usize),
-            (&[n], b'B') => Self::CursorDown(n as usize),
-            (&[n], b'C') => Self::CursorForward(n as usize),
-            (&[n], b'D') => Self::CursorBackward(n as usize),
-            (&[], b'J') | (&[0], b'J') => Self::Erase(EraseMode::ToEndOfScreen),
-            (&[2], b'J') => Self::Erase(EraseMode::ToBeginning),
-            (&[3], b'J') => Self::Erase(EraseMode::Scrollback),
-            _ => return None,
-        })
-    }
-}
-
-pub enum ParsedResult {
+pub enum AnsiResult {
     Passthrough(u8),
     CurrentlyParsing,
     Action(TerminalAction),
@@ -116,16 +82,16 @@ pub enum ParsedResult {
 }
 
 impl AnsiParser {
-    pub fn next(&mut self, b: u8) -> ParsedResult {
+    pub fn next(&mut self, b: u8) -> AnsiResult {
         println!("next: parsing `{}`", b as char);
         match self.state {
             CsiState::Waiting if b == b'\x1b' => {
                 self.state = CsiState::Escaped;
-                ParsedResult::CurrentlyParsing
+                AnsiResult::CurrentlyParsing
             }
             CsiState::Escaped if b == b'[' => {
                 self.state = CsiState::ExpectingParams;
-                ParsedResult::CurrentlyParsing
+                AnsiResult::CurrentlyParsing
             }
             CsiState::ExpectingParams => {
                 if is_csi_terminator(b) {
@@ -135,12 +101,12 @@ impl AnsiParser {
                 if b.is_ascii_digit() {
                     self.number_bucket.0.push(b);
                     self.state = CsiState::FoundParam;
-                    return ParsedResult::CurrentlyParsing;
+                    return AnsiResult::CurrentlyParsing;
                 }
 
                 println!("malformed ansi: expected digit, found: `{}`", b as char);
                 self.reset_on_failure();
-                ParsedResult::InvalidAnsi(b)
+                AnsiResult::InvalidAnsi(b)
             }
             CsiState::FoundParam => {
                 if is_csi_terminator(b) {
@@ -150,13 +116,13 @@ impl AnsiParser {
                 if b == b';' {
                     self.collect_bucket();
                     self.state = CsiState::ExpectingParams;
-                    return ParsedResult::CurrentlyParsing;
+                    return AnsiResult::CurrentlyParsing;
                 }
 
                 if b.is_ascii_digit() {
                     self.number_bucket.0.push(b);
                     self.state = CsiState::FoundParam;
-                    return ParsedResult::CurrentlyParsing;
+                    return AnsiResult::CurrentlyParsing;
                 }
 
                 println!(
@@ -164,9 +130,9 @@ impl AnsiParser {
                     b as char
                 );
                 self.reset_on_failure();
-                ParsedResult::InvalidAnsi(b)
+                AnsiResult::InvalidAnsi(b)
             }
-            _ => ParsedResult::Passthrough(b),
+            _ => AnsiResult::Passthrough(b),
         }
     }
 
@@ -185,7 +151,7 @@ impl AnsiParser {
         self.number_bucket.0.clear();
     }
 
-    fn terminate_current_parse(&mut self, b: u8) -> ParsedResult {
+    fn terminate_current_parse(&mut self, b: u8) -> AnsiResult {
         match self.collect_bucket() {
             Some(()) => {}
             None => {
@@ -194,20 +160,20 @@ impl AnsiParser {
                     self.number_bucket
                 );
                 self.reset_on_failure();
-                return ParsedResult::InvalidAnsi(b);
+                return AnsiResult::InvalidAnsi(b);
             }
         };
         self.state = CsiState::Waiting;
         let action_result = TerminalAction::from_params_and_terminator(&self.params.0, b);
         let ret = match action_result {
-            Some(action) => ParsedResult::Action(action),
+            Some(action) => AnsiResult::Action(action),
             None => {
                 println!(
                     "found unhandled CSI terminator: `{}`, with params `{}`",
                     b as char, self.params
                 );
                 self.reset_on_failure();
-                ParsedResult::InvalidAnsi(b)
+                AnsiResult::InvalidAnsi(b)
             }
         };
         self.params.0.clear();
