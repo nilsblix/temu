@@ -10,7 +10,7 @@ use nix::{
 };
 
 use ansi::{AnsiParser, AnsiResult};
-use terminal_action::{TerminalAction, EraseMode};
+use terminal_action::{EraseMode, TerminalAction};
 
 fn spawn_pty_with_shell(window_size: WindowSize) -> OwnedFd {
     let win_size = nix::pty::Winsize {
@@ -157,22 +157,29 @@ impl TerminalEmulator {
                 AnsiResult::Passthrough(b) => self.process_byte(b),
                 AnsiResult::CurrentlyParsing => {}
                 AnsiResult::Action(action) => match action {
-                    TerminalAction::CursorPosition { row, col } =>
-                        self.cursor = CursorPos { row: row - 1, col: col - 1 },
-                    TerminalAction::CursorUp(n) =>
-                        self.cursor.row = self.cursor.row.saturating_sub(n),
-                    TerminalAction::CursorDown(n) =>
-                        self.cursor.row = (self.cursor.row + n).min(self.window_size.rows - 1),
-                    TerminalAction::CursorForward(n) =>
-                        self.cursor.col = (self.cursor.col + n).min(self.window_size.cols - 1),
-                    TerminalAction::CursorBackward(n) =>
-                        self.cursor.col = self.cursor.col.saturating_sub(n),
+                    TerminalAction::CursorPosition { row, col } => {
+                        self.cursor = CursorPos {
+                            row: row - 1,
+                            col: col - 1,
+                        }
+                    }
+                    TerminalAction::CursorUp(n) => {
+                        self.cursor.row = self.cursor.row.saturating_sub(n)
+                    }
+                    TerminalAction::CursorDown(n) => {
+                        self.cursor.row = (self.cursor.row + n).min(self.window_size.rows - 1)
+                    }
+                    TerminalAction::CursorForward(n) => {
+                        self.cursor.col = (self.cursor.col + n).min(self.window_size.cols - 1)
+                    }
+                    TerminalAction::CursorBackward(n) => {
+                        self.cursor.col = self.cursor.col.saturating_sub(n)
+                    }
                     TerminalAction::Erase(EraseMode::ToBeginning) => {
                         let idx = self.cursor_idx();
                         self.buf[0..idx].fill(b' ');
                     }
-                    TerminalAction::Erase(EraseMode::Scrollback) =>
-                        self.buf.fill(b' '),
+                    TerminalAction::Erase(EraseMode::Scrollback) => self.buf.fill(b' '),
                     TerminalAction::Erase(EraseMode::ToEndOfScreen) => {
                         let idx = self.cursor_idx();
                         self.buf[idx..].fill(b' ');

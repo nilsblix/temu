@@ -73,7 +73,6 @@ impl Default for AnsiParser {
     }
 }
 
-
 pub enum AnsiResult {
     Passthrough(u8),
     CurrentlyParsing,

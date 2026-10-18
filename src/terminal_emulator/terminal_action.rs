@@ -22,7 +22,10 @@ impl TerminalAction {
     pub fn from_params_and_terminator(params: &[u32], terminator: u8) -> Option<TerminalAction> {
         Some(match (params, terminator) {
             (&[], b'H') => Self::CursorPosition { row: 1, col: 1 },
-            (&[row, col], b'H') => Self::CursorPosition { row: row as usize, col: col as usize },
+            (&[row, col], b'H') => Self::CursorPosition {
+                row: row as usize,
+                col: col as usize,
+            },
             (&[n], b'A') => Self::CursorUp(n as usize),
             (&[n], b'B') => Self::CursorDown(n as usize),
             (&[n], b'C') => Self::CursorForward(n as usize),
